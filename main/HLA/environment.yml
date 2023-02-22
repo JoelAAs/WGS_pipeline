@@ -1,0 +1,9 @@
+name: py_hla
+channels:
+  - bioconda
+dependencies:
+  - python=2.7
+  - numpy
+  - pandas
+  - pyyaml
+  - statsmodels=0.9.0

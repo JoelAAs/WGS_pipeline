@@ -1,0 +1,30 @@
+fasta:     "/sw/data/uppnex/piper_references/2016-04-07/gatk_bundle/2.8/b37/human_g1k_v37.fasta"
+annotated_gvcf: "/proj/nobackup/sens2018106/analysis/pipeline_part1/run_folder/gatk/gvcfs/joint/geno/VQSR/filter/annotated/merged_annovar.hg19_multianno.vcf.gz"
+gene_tsv: "input_data/Homo_sapiens.GRCh37.87.genes.tsv"
+
+# GCTA
+gcta: ""
+group_grm: ""
+# Filter options for burden test and fetched fields from annotated VCF
+burden_filters:
+   not:
+     Func.ensGen:
+       - "synonomous"
+       - "intronic"
+     ExonicFunc.ensGene:
+       - "synonomous"
+   is:
+   less:
+   greater:
+     SIFT_score:
+       - 0
+burden_annotation:
+  - "snp138"
+  - "1000g2014oct_eur"
+  - "1000g2014oct_all"
+
+# These are fixed outputs and should not be changed
+output_files:
+  - covar_pc
+  - phenofile
+  - run_folder/plink/SNP/checkfile.txt

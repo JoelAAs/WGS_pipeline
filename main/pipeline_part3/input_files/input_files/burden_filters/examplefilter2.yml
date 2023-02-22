@@ -1,0 +1,22 @@
+# Input VCF.gz and set of genes
+annotated_gvcf: "/proj/nobackup/sens2018106/analysis/pipeline_part1/run_folder/gatk/gvcfs/joint/geno/VQSR/filter/annotated/merged_annovar.hg19_multianno.vcf.gz"
+gene_tsv: "input_data/Homo_sapiens.GRCh37.87.genes.tsv"
+
+# Filter options for burden test and fetched fields from annotated VCF
+burden_filters:
+   not:
+     Func.ensGen:
+       - "synonomous"
+       - "intronic"
+     ExonicFunc.ensGene:
+       - "synonomous"
+   is:
+   less:
+   greater:
+     SIFT_score:
+       - 0
+burden_annotation:
+  - "snp138"
+  - "1000g2014oct_eur"
+  - "1000g2014oct_all"
+

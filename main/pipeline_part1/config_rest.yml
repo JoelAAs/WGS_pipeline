@@ -1,0 +1,69 @@
+fasta:     "/sw/data/uppnex/piper_references/2016-04-07/gatk_bundle/2.8/b37/human_g1k_v37.fasta"
+exclude:   "pipeline_files/exclude_regions_GL.bed"
+known:     "/sw/data/uppnex/piper_references/2016-04-07/gatk_bundle/2.8/b37/dbsnp_138.b37.vcf"
+hapmap:    "/sw/data/uppnex/GATK/2.8/b37/hapmap_3.3.b37.vcf"
+omni:      "/sw/data/uppnex/GATK/2.8/b37/1000G_omni2.5.b37.vcf"
+G1K:       "/sw/data/uppnex/GATK/2.8/b37/1000G_phase1.snps.high_confidence.b37.vcf"
+mills:     "/sw/data/uppnex/GATK/2.8/b37/Mills_and_1000G_gold_standard.indels.b37.vcf"
+
+genome:    "GRCh37.75"
+block:     10000000   # number of bases per interval used for haplotype calling
+annovar_batch_size: 150
+
+# Stargazer specific
+R_LIB:                   "/proj/sens2018106/softwares/R_packages"
+control_interval:        "19:38922317-39079025"
+stargazer_targets:
+- cyp1a1: "15:75011883-75017951"
+- cyp1a2: "15:75041185-75048543"
+- cyp2a6: "19:41349443-41388657"
+- cyp2b6: "19:41497204-41456565"
+- cyp2c8: "10:96796530-96829254"
+- cyp2c9: "10:96698415-96749147"
+- cyp2c19: "10:96447911-9661301"
+- cyp2d6: "19:38922317-39079025"
+- cyp2e1: "10:135333910-135374724"
+- cyp3a4: "7:99354604-99381888"
+- cyp3a5: "7:99245817-99277621"
+- cyp4f2: "19:15988833-16008930"
+- dpyd: "1:97543299-98386605"
+- g6pd: "X:153759606-153775787"
+- gstm1: "1:110230436-110251661"
+- gstp1: "11:67351066-67354131"
+- gstt1: "22:24376133-24384680"
+- nat1: "8:18027986-18081198"
+- nat2: "8:18248755-18258728"
+- nudt15: "13:48611703-48621358"
+- slc15a2: "3:121612936-121662949"
+- slc22a2: "6:160592093-160698670"
+- slco1b1: "12:21284136-21392180"
+- slco2b1: "11:74811608-74917594"
+- tpmt: "6:18128542-18155305"
+- ugt1a1: "2:234668894-234681945"
+- ugt2b7: "4:69917081-69978705"
+- ugt2b15: "4:69512348-69536346"
+- ugt2b17: "4:69402902-69434245"
+- vkorc1: "16:31102163-31107301"
+- vdr: "12:48235320-48336831"
+
+stargazer_batch_size:    200
+
+bam_folder:             "/proj/nobackup/sens2018106/analysis/pipeline_part1/bams/"
+path_vcf:               "/proj/nobackup/sens2018106/analysis/pipeline_part1/run_folder/gatk/gvcfs/joint/geno/VQSR/filter/merged_VQSR_variants_pass_split.vcf.gz"
+stargazer:              "/proj/sens2018106/softwares/Stargazer_v1.0.1/Stargazer.py"
+
+# Filtering options
+prior: 15.0     # phred scaled prior used for true positive set in VQSR
+filtLev: 90.0   # 90 corresponds to allowing 10% false negative in VQSR
+
+# These are fixed outputs and should not be changed
+sample_ids:
+- run_folder/gatk/gvcfs/joint/geno/VQSR/filter/annotated/merged_snpEff.vcf.gz
+- run_folder/gatk/gvcfs/joint/geno/VQSR/filter/annotated/merged_VEP.txt.gz
+- run_folder/gatk/gvcfs/joint/geno/VQSR/filter/annotated/merged_annovar.hg19_multianno.vcf.gz
+- run_folder/QC/king/merged_king_relplot.R
+- run_folder/QC/king/merged_king_autoQC_Summary.txt
+- run_folder/QC/king/merged_kingpc.dat
+- run_folder/QC/bcftools/merged_bcftools_stats.txt
+- run_folder/QC/multiQC/multiqc_report.html
+- run_folder/stargazer/results/cyp2d6_haplotypes.csv

@@ -1,0 +1,15 @@
+{
+  "__default__" :
+  {
+    "account"   : "sens2018106",
+    "time"      : "3-00:00:00",
+    "partition" : "core",
+    "n"         : 10,
+    "jobs"      : 15
+  },
+  "set_missing_vars":
+  {
+    "n"    : 10,
+    "time" : "5-0:00:00"
+  }
+}

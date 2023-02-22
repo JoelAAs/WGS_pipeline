@@ -1,0 +1,18 @@
+CHROM	FEATURE	START	END	gene_name	ccds_id	exon_id	exon_number	exon_version	gene_biotype	gene_id	gene_source	gene_version	havana_transcript	havana_transcript_version	protein_id	protein_version	tag	transcript_biotype	transcript_id	transcript_name	transcript_source	transcript_version
+3	gene	183637722	183735803	ABCC5					protein_coding	ENSG00000114770	ensembl_havana	12										
+4	gene	89011416	89152474	ABCG2					protein_coding	ENSG00000118777	ensembl_havana	6										
+5	gene	131705444	131731306	SLC22A5					protein_coding	ENSG00000197375	ensembl_havana	8										
+6	gene	160769300	160876014	SLC22A3					protein_coding	ENSG00000146477	ensembl_havana	4										
+7	gene	87133175	87342611	ABCB1					protein_coding	ENSG00000085563	ensembl_havana	10										
+11	gene	62703857	62752455	SLC22A6					protein_coding	ENSG00000197901	ensembl_havana	7										
+11	gene	74811608	74917594	SLCO2B1					protein_coding	ENSG00000137491	ensembl_havana	10										
+12	gene	21417534	21572528	SLCO1A2					protein_coding	ENSG00000084453	ensembl_havana	12										
+13	gene	95672083	95953687	ABCC4					protein_coding	ENSG00000125257	ensembl_havana	9										
+13	gene	99336055	99404908	SLC15A1					protein_coding	ENSG00000088386	ensembl_havana	11										
+14	gene	70242134	70264006	SLC10A1					protein_coding	ENSG00000100652	ensembl_havana	4										
+16	gene	16043434	16236931	ABCC1					protein_coding	ENSG00000103222	ensembl_havana	14										
+16	gene	16242785	16317379	ABCC6					protein_coding	ENSG00000091262	ensembl_havana	10										
+17	gene	19398698	19482347	SLC47A1					protein_coding	ENSG00000142494	ensembl_havana	9										
+17	gene	19581601	19622292	SLC47A2					protein_coding	ENSG00000180638	ensembl_havana	13										
+17	gene	48712138	48769613	ABCC3					protein_coding	ENSG00000108846	ensembl_havana	11										
+21	gene	46913486	46964325	SLC19A1					protein_coding	ENSG00000173638	ensembl_havana	14										

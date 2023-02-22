@@ -1,0 +1,334 @@
+configfile: "config_batching.yml"
+
+import gzip
+import os
+import glob
+from math              import ceil
+#from multiprocessing   import Process, Queue
+#from subprocess        import CalledProcessError, check_call
+
+
+#######################################################################
+#                           FUNCTIONS                                 #
+#######################################################################
+
+
+def HC_caller_sample_generator(sampleList, bins):      # make the string input for joint genotyping
+   return binIt(["--variant run_folder/gatk/gvcfs/"+id+".g.vcf.gz " for id in sampleList], bins)
+
+def binIt(l, size):
+  if len(l) <= size:
+    return [l]
+  return [l[:size]] + binIt(l[size:], size)
+
+
+def extract_samples_vcfs(vcfs):
+  samplelist = []
+  print(vcfs)
+  for vcf in vcfs:
+    fh   = gzip.open(vcf, 'rt')
+    line = fh.readline()
+    while line.startswith('##'):
+      line = fh.readline()
+    cols = line.strip().split()
+    for sample in cols[9:]:
+      samplelist.append([sample, vcf])
+    fh.close()
+  return samplelist
+
+
+def determine_block(file):
+  fh    = open(file, 'r')
+  block = 0
+  for line in fh:
+    block += int(line.strip().split('-')[1])
+  fh.close()
+  return block - 1
+
+
+def get_previous_mergeFiles(filelist):
+  prev_mergeFiles = []
+  for file in filelist:
+    index = int(os.path.basename(file).strip().split('_')[0].split('.')[1])
+    prev_mergeFiles.append(index)
+  return prev_mergeFiles, max(prev_mergeFiles)
+
+
+def find_batch():
+  return str(config['batch'])
+
+def get_cohort_bam(sample):
+  if "SweGen" not in sample:
+    sample += ".clean.dedup"
+  return f"bams/{sample}.bam"
+
+def get_recal_table(sample):
+  if "SweGen" in sample:
+    return f"run_folder/gatk/recal_tables/{sample}.pre_recal.table"
+  else:
+    return f"bams/{sample}.pre_recal.table"
+#######################################################################
+#                           CONFIG                                    #
+#######################################################################
+
+fh = open("samplefile.txt", "r")
+config['all_samples'] = []
+for line in fh:
+  if not line.startswith('filename'):
+    id = line.strip().split()[0]
+    config['all_samples'].append(id)   #adds all samples to the entry 'all_samples'
+fh.close()
+
+
+# Checking if interval file is present (indicating a previous run) and that the intervals match
+print('Checking intervals')
+if os.path.isfile("pipeline_files/interval_files/interval0001.intervals"):
+  block = determine_block("pipeline_files/interval_files/interval0001.intervals")
+  if not block == config['block']:
+    raise ValueError('ERROR block size is not the same as previous run. Block size entered now: '+str(config['block'])+'. Previous block size: '+str(block)+'. If you are running for the first time, make sure there are no interval files already present')
+else:
+  print('No intervals detected, creating new ones')
+  os.system("python3 pipeline_files/create_interval_list.py \
+             --dict "+config['fasta'][:-6]+".dict \
+             --block "+str(config['block'])+" \
+             --outfolder pipeline_files/interval_files/")
+
+interval_list = []
+fh = open("pipeline_files/interval_files/00_intervals.txt", "r")
+for line in fh:
+  interval_list.append(line.strip())
+# add interval files to config
+config['interval_files'] = interval_list
+# add interval "names" to config
+inter = []
+i = 0
+while i < len(config['interval_files']):
+  inter.append(i)
+  i += 1
+config['intervals'] = inter
+
+print(config)
+
+
+onstart:
+  # check that current batch number has not been used before
+  print('Checking batch numbers')
+  files = glob.glob("run_folder/gatk/gvcfs/batch_files/batch*")
+  if len(files) > 0:
+    print("batchfiles found")
+    f       = [os.path.basename(file) for file in files]
+    batches = [int(batch.split('.')[1]) for batch in f]
+    batches = set(batches)
+
+#    if config["batch"] in batches:
+#      raise ValueError('ERROR this batch number has already been used previously. Batches previously run: '+str(batches)+', current batch number: '+str(config["batch"])+'. Please choose another batch number')
+
+  # check that sample numbers match between config and samplefile
+  print('Checking sample numbers')
+  with open('samplefile.txt') as f:
+    samples = [line for line in f]
+    if not len(config['sample_ids']) == len(samples) - 1:
+      raise ValueError('ERROR The number of samples in the config file and in the samplefile.txt file does not match: No. samples in config file: '+str(len(config['sample_ids']))+', no. samples in samplefile.txt: '+str(len(samples) - 1))
+
+
+onsuccess:
+  if len(glob.glob("run_folder/gatk/gvcfs/batch_files/batch.*.run.0000.log")) > 0:
+    shell("rm run_folder/gatk/gvcfs/batch_files/batch.*.run.0000.log")
+    print("### INFO: Removing empty batch logs ###")
+
+
+######################################################################
+#                            RULES                                   #
+######################################################################   
+
+rule all:
+  input:
+    config["sample_ids"],
+    dynamic("run_folder/gatk/gvcfs/joint/merged.{runid}.g.vcf.gz")
+
+rule BaseRecalibrator:
+  params:
+    fasta   = config["fasta"],
+    dbsnp = config["dbsnp"],
+    mill_indel = config["known"]
+  input:
+    bam   = lambda wc: get_cohort_bam(wc.sample)
+  output:
+    "run_folder/gatk/recal_tables/{sample}.pre_recal.table"
+  shell:
+    """
+    java -jar $GATK_HOME/GenomeAnalysisTK.jar -T BaseRecalibrator \
+      -R {params.fasta} \
+      -I {input.bam} \
+      --known-sites {params.dbsnp} \
+      -o {output}
+    """
+
+
+rule HC_gVCFs:                                  # uses GATK to call bam files to g.vcf
+  params:
+    fasta   = config["fasta"],
+    exclude = config["exclude"]
+  input:
+    bam   = lambda wc: get_cohort_bam(wc.sample),
+    recal = "run_folder/gatk/recal_tables/{sample}.pre_recal.table"
+  output:
+    "run_folder/gatk/gvcfs/{sample}.g.vcf.gz"
+  shell:
+    """
+    java -jar $GATK_HOME/GenomeAnalysisTK.jar -T HaplotypeCaller \
+    -R {params.fasta} \
+    -I {input.bam} \
+    -XL {params.exclude} \
+    --BQSR {input.recal} \
+    --emitRefConfidence GVCF \
+    -o {output}
+    """
+
+
+rule Check_Status:                  # check if CombineGVCFs have been run before, and on which samples
+  params:
+    bins      = config["bins"],
+    intervals = config["intervals"],
+    batch     = config["batch"]
+  input:
+    expand("run_folder/gatk/gvcfs/{sample}.g.vcf.gz", sample = config['all_samples'])
+  output:
+    dynamic("run_folder/gatk/gvcfs/batch_files/batch."+find_batch()+".run.{runid}.log"),
+  run:
+    print('intervals: '+str(params.intervals))
+    if os.path.isfile("run_folder/gatk/gvcfs/joint/restart_file.txt"):
+      print('## INFO ##   Adding samples to previous runs')
+
+      filelist = []
+      fh       = open("run_folder/gatk/gvcfs/joint/restart_file.txt","r")
+      for file in fh:
+        filelist.append(file.strip())
+      prev_mergeFiles, max_index = get_previous_mergeFiles(filelist)  # find the names for previous runs
+      config['start'] = max_index + 1
+      print('previous merge files')
+      print(prev_mergeFiles)
+
+      # get sample ids of sample previously run
+      samples_run = extract_samples_vcfs(filelist)
+      samples_run_list = [j[0] for j in samples_run]
+
+      # get sample ids of all samples in current input
+      all_samples = extract_samples_vcfs([u for u in config['sample_ids'] if u.endswith('g.vcf.gz')])
+
+      # check which samples hasn't been processed yet
+      samples_to_run = []
+      for sample in all_samples:
+        if not sample[0] in samples_run_list:
+          samples_to_run.append(sample)
+      print('samples to run')
+      print(samples_to_run)
+      # if no new samples have been added, write a dummy output file
+      if len(samples_to_run) == 0:
+        config['mergeFiles'] = []
+        file = open('run_folder/gatk/gvcfs/batch_files/batch.'+find_batch()+'.run.0000.log', 'w')
+        file.write('No new samples added since last run')
+        file.close()
+
+      else:
+        # create new merge files starting after present ones
+        mergeFiles = []
+        i          = config['start']
+        old_bins   = max_index + 1
+        # bins       = ceil(len(config['all_samples'])/config['bins'])
+        extra_bins = ceil(len(samples_to_run)/config['bins'])
+        while i < old_bins + extra_bins:
+          mergeFiles.append(str(i))
+          i += 1
+        config['mergeFiles'] = mergeFiles
+
+        # add which samples to run to config
+        config['runSamples'] = [os.path.basename(i[1]).rstrip('.g.vcf.gz') for i in samples_to_run]
+
+        sstring      = HC_caller_sample_generator(config['runSamples'], params.bins)
+        sstring_list = [" ".join(bin) for bin in sstring]
+
+        # write batch files for each run to be submited to CombineGVCFs
+        runlist = []
+        for i in params.intervals:
+          count = 0
+          while count < len(config["mergeFiles"]):
+            file = open('run_folder/gatk/gvcfs/batch_files/batch.'+find_batch()+'.run.'+str(config["mergeFiles"][count])+'_'+str(i)+'.log', 'w')
+            file.write(str(sstring_list[count])+'\nBatch:\t'+str(config["mergeFiles"][count])+'\nInterval:\t'+str(i))
+            file.close()
+            runlist.append([config["mergeFiles"][count],i,sstring_list[count]])
+            count += 1
+        print(runlist)
+
+    else:   # if no previous run
+      print('## INFO ##   No previous samples detected')
+
+      config['runSamples'] = config['all_samples']
+      sstring              = HC_caller_sample_generator(config['runSamples'], params.bins)
+      sstring_list         = [" ".join(bin) for bin in sstring]
+      config['start']      = 0
+      mergeFiles           = []
+      i                    = 0
+      bins                 = ceil(len(config['all_samples'])/config['bins'])
+      while i < bins:
+        mergeFiles.append(str(i))
+        i += 1
+      config['mergeFiles'] = mergeFiles
+
+      # write batch files for each run to be submited to CombineGVCFs
+      runlist = []
+      for i in params.intervals:
+        count = 0
+        while count < len(config["mergeFiles"]):
+          file = open('run_folder/gatk/gvcfs/batch_files/batch.'+find_batch()+'.run.'+str(config["mergeFiles"][count])+'_'+str(i)+'.log', 'w')
+          file.write(str(sstring_list[count])+'\nBatch:\t'+str(config["mergeFiles"][count])+'\nInterval:\t'+str(i))
+          file.close()
+          runlist.append([config["mergeFiles"][count],i,sstring_list[count]])
+          count += 1
+      print(runlist)
+
+
+
+rule HC_CombineGVCFs:                                # uses GATK to do joint calling on all samples
+  params:
+    fasta   = config["fasta"],
+    exclude = config["exclude"],
+    intList = config["interval_files"]
+  input:
+    "run_folder/gatk/gvcfs/batch_files/batch."+find_batch()+".run.{runid}.log"
+  output:
+    "run_folder/gatk/gvcfs/batch_files/log_{runid}.log",
+    "run_folder/gatk/gvcfs/joint/merged.{runid}.g.vcf.gz",
+
+  run:
+    run        = os.path.basename(input[0]).split('.')[3]
+    print('run: '+run)
+    print('interval files: '+str(params.intList))
+    if not run == '0000':
+      fh       = open(input[0], 'r')
+      samples  = fh.readline().strip()
+      batch    = fh.readline().strip().split()[1]
+      interval = fh.readline().strip().split()[1]
+      intFile  = params.intList[int(interval)]
+
+      print(samples)
+      print(batch)
+      print(interval)
+      print(intFile)
+
+      shell("java -jar $GATK_HOME/GenomeAnalysisTK.jar -T CombineGVCFs \
+      -R {params.fasta} \
+      -L {intFile} \
+      -XL {params.exclude} \
+      {samples} \
+      -o {output[1]}")
+
+      shell("echo {output[1]} >> run_folder/gatk/gvcfs/joint/restart_file.txt")
+
+    else:
+      shell("touch {output[1]}")
+
+    shell("cp {input} {output[0]}")
+
+
+ 

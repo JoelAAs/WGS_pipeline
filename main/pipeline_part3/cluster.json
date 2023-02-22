@@ -1,0 +1,35 @@
+{
+  "__default__" :
+  {
+    "account"   : "sens2018106",
+    "time"      : "3-00:00:00",
+    "partition" : "core",
+    "n"         : 1,
+    "jobs"      : 150
+  },
+  "run_plink_SNP_assoc":
+  {
+    "n"    : 10,
+    "time" : "5-0:00:00"
+  },
+  "make_covar_file":
+  {
+    "n"    : 8,
+    "time" : "2-0:00:00"
+  },
+  "manhattan_polt":
+  {
+    "n"    : 10,
+    "time" : "1-0:00:00"
+  },
+  "genotype_matrix":
+  {
+    "n"    : 16,
+    "time" : "1-0:00:00" 
+  },
+  "get_maf":
+  {
+    "n"    : 10,
+    "time" : "7-0:00:00"  
+  }
+}

@@ -1,0 +1,16 @@
+---
+title: "HLA stuff"
+author: "Joel Ås"
+date: "1/30/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source("plot_hla.R")
+```
+
+```{r cars}
+ggplotly(gg1)
+```
+

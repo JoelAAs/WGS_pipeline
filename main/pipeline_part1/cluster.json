@@ -1,0 +1,61 @@
+{
+  "__default__" :
+  {
+    "account"   : "sens2018106",
+    "time"      : "3-00:00:00",
+    "partition" : "core",
+    "n"         : 4,
+    "jobs"      : 150
+  },
+  "HC_gVCFs":
+  {
+    "n"    : 2,
+    "time" : "10-00:00:00"
+  },
+  "HC_CombineGVCFs":
+  {
+    "n"    : 4,
+    "time" : "30:00:00"
+  },
+  "HC_GenotypeGVCFs":
+  {
+    "n"    : 4,
+    "time" : "30:00:00"
+  },
+  "Concat_VCFs":
+  {
+    "n"    : 4,
+    "time" : "4-00:00:00"
+  },
+  "VQSR_Snps":
+  {
+    "n"    : 4,
+    "time" : "50:00:00"
+  },
+  "VQSR_Indels":
+  {
+    "n"    : 4,
+    "time" : "50:00:00"
+  },
+  "Annovar":
+  {
+    "n"    : 16,
+    "time" : "5-00:00:00"
+  },
+  "BamQC":
+  {
+    "n"    : 6,
+    "time" : "3-00:00:00"
+  },
+  "SamtoolsStats":
+  {
+    "n"    : 6,
+    "time" : "3-00:00:00"
+  },
+  "King":
+  {
+    "n"    : 16,
+    "time" : "3-00:00:00"
+  }
+
+}

@@ -1,0 +1,14 @@
+gene_tsv: "input_data/CNS.toxicitet~rest_selected_genes.tsv"
+
+# Filter options for burden test and fetched fields from annotated VCF
+burden_filters:
+   all: 1
+   not:
+   is:
+   less:
+   greater:
+
+burden_annotation:
+  - "snp138"
+  - "1000g2014oct_eur"
+  - "1000g2014oct_all"

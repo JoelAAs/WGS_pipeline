@@ -1,0 +1,564 @@
+configfile: "config_rest.yml"
+
+import gzip
+import os
+import glob
+from math              import ceil
+from multiprocessing   import Process, Queue
+from subprocess        import CalledProcessError, check_call
+
+
+#######################################################################
+#                           FUNCTIONS                                 #
+#######################################################################
+
+def HC_caller_sample_generator2(sampleList, interval):
+  sstring = ''
+  for id in sampleList:
+    s = os.path.basename(id).strip().split('.')[1].split('_')[1]
+    if s == str(interval):
+      sstring += "--variant "+id+" "
+  return sstring
+
+
+def determine_block(file):
+  fh    = open(file, 'r')
+  block = 0
+  for line in fh:
+    block += int(line.strip().split('-')[1])
+  fh.close()
+  return block - 1
+
+
+def config_to_input(input):
+  return input
+
+
+def binIt(l, size):
+  if len(l) <= size:
+    return [l]
+  return [l[:size]] + binIt(l[size:], size)
+
+
+#######################################################################
+#                           CONFIG                                    #
+#######################################################################
+
+# Stargazer batches
+nr_bam_files = len(list(filter(lambda file: re.search("\\.bam$", file), os.listdir(config["bam_folder"]))))
+config["stargazer_batches"] = ceil(nr_bam_files/config["stargazer_batch_size"])
+
+# Stargazer targets
+config["star_target"] = [
+	f"run_folder/stargazer/results/{target}_haplotypes.csv" for target in  config["stargazer_targets"].keys()
+	if target not in ["vdr"]
+	]
+
+
+fh = open("samplefile.txt", "r")
+config['all_samples'] = []
+for line in fh:
+  if not line.startswith('filename'):
+    id = line.strip().split()[0]
+    config['all_samples'].append(id)   #adds all samples to the entry 'all_samples'
+
+
+# Annnovar batches
+config["annovar_batches"] = [re.search("interval([0-9]{4}).intervals", file).groups()[0] for file in
+    glob.glob("pipeline_files/interval_files/*.intervals")]
+
+
+
+os.system("python3 pipeline_files/create_interval_list.py \
+           --dict "+config['fasta'][:-6]+".dict \
+           --block "+str(config['block'])+" \
+           --outfolder pipeline_files/interval_files/")
+interval_list = []
+fh = open("pipeline_files/interval_files/00_intervals.txt", "r")
+for line in fh:
+  interval_list.append(line.strip())
+# add interval files to config
+config['interval_files'] = interval_list
+# add interval "names" to config
+inter = []
+inter_file_dict = {}
+i = 0
+for file_name in config['interval_files']:
+  inter.append(i)
+  inter_file_dict.update({str(i):file_name})
+  i += 1
+config['intervals'] = inter
+config['intervals_dict'] = inter_file_dict
+
+files = glob.glob("run_folder/gatk/gvcfs/joint/merged.*_*.g.vcf.gz")
+#print(files)
+config['batchFiles'] = files
+
+onstart:
+  # check so the block size of this run and previous run is the same
+  block = determine_block("pipeline_files/interval_files/interval0001.intervals")
+  if not block == config['block']:
+    raise ValueError('ERROR block size is not the same as previous run. Block size entered now: '+str(config['block'])+'. Previous block size: '+str(block))
+
+
+######################################################################
+#                            RULES                                   #
+######################################################################
+
+rule all:
+  input:
+    config["sample_ids"],
+    config["star_target"]
+
+
+rule HC_GenotypeGVCFs:
+  params:
+    fasta   = config["fasta"],
+    exclude = config["exclude"],
+    intList = config["interval_files"]
+  input:
+    interval_file = lambda wildcard: inter_file_dict[wildcard.i],
+    batch_files = config["batchFiles"]
+  output:
+    "run_folder/gatk/gvcfs/joint/geno/merged.{i}.vcf.gz"
+  run:
+      s_string = HC_caller_sample_generator2(input.batch_files, str(wildcards.i))
+      cmd = "echo java -jar $GATK_HOME/GenomeAnalysisTK.jar -T GenotypeGVCFs" \
+          f"-R {params.fasta}" \
+          f"-L {input.interval_file}" \
+          f"-XL {params.exclude}" \
+          f"{s_string}" \
+          f"-o {output}"
+      shell(cmd)
+
+
+
+rule Concat_VCFs:
+  input:
+    expand("run_folder/gatk/gvcfs/joint/geno/merged.{i}.vcf.gz", i = config['intervals'])
+  output:
+    "run_folder/gatk/gvcfs/joint/geno/merged_all.vcf.gz"
+  shell:
+    """
+#    touch {output}
+    vcf-concat {input} | bgzip -c > {output}
+    tabix {output}
+    """
+
+
+
+rule VQSR_Snps:                                       # uses GATK to run VQSR on merged file
+  params:
+    fasta   = config["fasta"],
+    known   = config["known"],
+    hapmap  = config["hapmap"],
+    omni    = config["omni"],
+    G1K     = config["G1K"],
+    prior   = config["prior"],
+    filtLev = config["filtLev"]
+  input:
+    "run_folder/gatk/gvcfs/joint/geno/merged_all.vcf.gz"
+  output:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/merged_VQSR_snps.vcf.gz"
+  shell:
+    """
+    java -jar $GATK_HOME/GenomeAnalysisTK.jar -T VariantRecalibrator \
+    -R {params.fasta} \
+    -input {input} \
+    -resource:hapmap,known=false,training=true,truth=true,prior=15.0 {params.hapmap} \
+    -resource:omni,known=false,training=true,truth=true,prior=12.0 {params.omni} \
+    -resource:1000G,known=false,training=true,truth=false,prior=10.0 {params.G1K} \
+    -resource:dbsnp,known=true,training=false,truth=false,prior=2.0 {params.known} \
+    -an QD -an SOR \
+    -mode SNP \
+    -tranche 100.0 -tranche 99.9 -tranche 99.0 -tranche 90.0 \
+    -recalFile "$(echo {output[0]} | head -c -8)_SNP.recal" \
+    -tranchesFile "$(echo {output[0]} | head -c -8)_SNP.tranches" \
+    -rscriptFile "$(echo {output[0]} | head -c -8)_SNP.plots.R"
+
+    java -jar $GATK_HOME/GenomeAnalysisTK.jar -T ApplyRecalibration \
+    -R {params.fasta} \
+    -input {input} \
+    --ts_filter_level {params.filtLev} \
+    -tranchesFile "$(echo {output[0]} | head -c -8)_SNP.tranches" \
+    -recalFile "$(echo {output[0]} | head -c -8)_SNP.recal" \
+    -mode SNP \
+    -o {output}
+    """
+
+
+rule VQSR_Indels:                                       # uses GATK to run VQSR on merged file
+  params:
+    fasta   = config["fasta"],
+    mills   = config["mills"],
+    known   = config["known"],
+    prior   = config["prior"],
+    filtLev = config["filtLev"]
+  input:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/merged_VQSR_snps.vcf.gz"
+  output:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/merged_VQSR_variants.vcf.gz"
+  shell:
+    """
+    java -jar $GATK_HOME/GenomeAnalysisTK.jar -T VariantRecalibrator \
+    -R {params.fasta} \
+    -input {input} \
+    -resource:mills,known=false,training=true,truth=true,prior=12.0 {params.mills} \
+    -resource:dbsnp,known=true,training=false,truth=false,prior=2.0 {params.known} \
+    -mode INDEL \
+    -an QD -an DP -an FS -an SOR -an ReadPosRankSum -an MQRankSum -an InbreedingCoeff \
+    -tranche 100.0 -tranche 99.9 -tranche 99.0 -tranche 90.0 \
+    --maxGaussians 4 \
+    -recalFile "$(echo {output[0]} | head -c -8)_INDEL.recal" \
+    -tranchesFile "$(echo {output[0]} | head -c -8)_INDEL.tranches" \
+    -rscriptFile "$(echo {output[0]} | head -c -8)_INDEL.plots.R"
+
+    java -jar $GATK_HOME/GenomeAnalysisTK.jar -T ApplyRecalibration \
+    -R {params.fasta} \
+    -input {input} \
+    --ts_filter_level {params.filtLev} \
+    -tranchesFile "$(echo {output[0]} | head -c -8)_INDEL.tranches" \
+    -recalFile "$(echo {output[0]} | head -c -8)_INDEL.recal" \
+    -mode INDEL \
+    -o {output}
+    """
+
+
+rule additional_filtering:                       # filters away non-PASS variants
+  input:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/merged_VQSR_variants.vcf.gz"
+  output:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/merged_VQSR_variants_pass.recode.vcf.gz"
+  shell:
+    """
+    vcftools --gzvcf {input} \
+    --not-chr M \
+    --remove-filtered-all \
+    --recode \
+    --recode-INFO-all \
+    --stdout \
+    | bgzip > {output}
+    """
+
+rule split_variants:                            # split multiallelic sites into single allelic
+  input:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/merged_VQSR_variants_pass.recode.vcf.gz"
+  output:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/merged_VQSR_variants_pass_split.vcf.gz"
+  shell:
+    """
+    bcftools norm -m -both {input} | bgzip > {output}
+    """
+
+
+################## QC metrics ######################
+
+def bam_suffix(sample):
+  if any([batch in  sample for batch in ["RB-1745", "RI-1933", "RJ-1930", "SB-2081", "RJ-1970"]]):
+    sample = sample + ".clean.dedup"
+  return "bams/" + sample + ".bam"
+
+
+rule BamQC:
+  input:
+    lambda wc: bam_suffix("{sample}".format(sample=wc.sample))
+  output:
+    "run_folder/QC/bamQC/{sample}_bamqc.html"
+  shell:
+    """
+    perl /proj/sens2018106/softwares/BamQC/bin/bamqc \
+    {input} \
+    -outdir run_folder/QC/bamQC/
+    if [[ {input} =~ .clean.dedup.bam ]]; then
+      TMP=$(echo {output} | sed "s/_bamqc.html/.clean.dedup_bamqc.html/g")
+      mv $TMP {output}
+    fi
+
+    """
+
+rule SamtoolsStats:
+  input:
+    lambda wc: bam_suffix("{sample}".format(sample=wc.sample))
+  output:
+    "run_folder/QC/samtools/{sample}.samtools.stats"
+  shell:
+    """
+    samtools stats {input} > {output}
+    """
+
+rule MultiQCinput:
+  input:
+    bamqc    = expand("run_folder/QC/bamQC/{sample}_bamqc.html", sample = config['all_samples']),
+    samstat  = expand("run_folder/QC/samtools/{sample}.samtools.stats", sample = config['all_samples']),
+    snpEff   = "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/annotated/merged_snpEff.csv",
+    bcftools = "run_folder/QC/bcftools/merged_bcftools_stats.txt"
+  output:
+      input_list = "run_folder/QC/multiQC/input_list.txt"
+  run:
+    with open(output.input_list, "w+") as f:
+      for line_in in input:
+        f.write(line_in + "\n")
+
+
+rule MultiQC:
+  input:
+    input_list = "run_folder/QC/multiQC/input_list.txt"
+  output:
+    html = "run_folder/QC/multiQC/multiqc_report.html"
+  shell:
+    """
+    module load MultiQC/1.5
+    multiqc --file-list {input} --outdir run_folder/QC/multiQC/ --dirs -f       #ToDo Check so it really reruns with new samples added
+    """
+
+rule King:
+  input:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/merged_VQSR_variants_pass_split.vcf.gz"
+  output:
+    "run_folder/QC/king/merged_king_relplot.R",
+    "run_folder/QC/king/merged_king_autoQC_Summary.txt",
+    "run_folder/QC/king/merged_kingpc.dat"
+  shell:
+    """
+    plink --vcf {input} --allow-no-sex --make-bed --out "$(echo {input[0]} | head -c -8)"
+
+    python3 pipeline_files/format_plink.py \
+    --bfile "$(echo {input[0]} | head -c -8)" \
+    --sample samplefile.txt \
+    --out run_folder/gatk/gvcfs/joint/geno/VQSR/filter/temp00045604
+
+    mv run_folder/gatk/gvcfs/joint/geno/VQSR/filter/temp00045604.fam "$(echo {input[0]} | head -c -8).fam"
+    mv run_folder/gatk/gvcfs/joint/geno/VQSR/filter/temp00045604.bim "$(echo {input[0]} | head -c -8).bim"
+
+    /proj/sens2018106/softwares/king/king \
+    -b "$(echo {input[0]} | head -c -8).bed"  \
+    --related \
+    --rplot \
+    --prefix "$(echo {output[0]} | head -c -11)"
+
+    /proj/sens2018106/softwares/king/king \
+    -b "$(echo {input[0]} | head -c -8).bed" \
+    --autoQC \
+    --prefix "$(echo {output[1]} | head -c -20)"
+
+    /proj/sens2018106/softwares/king/king \
+    -b "$(echo {input[0]} | head -c -8).bed" \
+    --mds \
+    --prefix "$(echo {output[2]} | head -c -7)"
+    """
+
+rule BcfTools:
+  input:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/merged_VQSR_variants_pass_split.vcf.gz"
+  output:
+    "run_folder/QC/bcftools/merged_bcftools_stats.txt"
+  shell:
+    """
+    module load python/2.7.15
+
+    samples="$(set +o pipefail; zcat {input} | head -500 | grep ^\#CHROM | cut -f10- --output-delimiter ',')"
+
+    bcftools stats \
+    -s $samples \
+    {input} > {output}
+
+    plot-vcfstats {output} -p run_folder/QC/bcftools/resultfolder || true
+    """
+
+
+################ Annotation ########################
+
+rule SnpEff:
+  params:
+    genome   = config["genome"]
+  input:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/merged_VQSR_variants_pass_split.vcf.gz"
+  output:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/annotated/merged_snpEff.vcf.gz",
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/annotated/merged_snpEff.csv"
+  shell:
+    """
+    java -jar $SNPEFF_HOME/snpEff.jar \
+    {params.genome} \
+    -csvStats "$(echo {output[0]} | head -c -8).csv" \
+    -nodownload \
+    -canon \
+    {input} \
+    | bgzip > {output[0]}
+    """
+
+rule VEP:
+  input:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/merged_VQSR_variants_pass_split.vcf.gz"
+  output:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/annotated/merged_VEP.txt.gz"
+  shell:
+    """
+    vep \
+    --cache \
+    --dir_cache $VEP_CACHE \
+    --offline \
+    -i {input} \
+    --force_overwrite \
+    --pick \
+    --assembly GRCh37 \
+    -o STDOUT \
+    | bgzip > {output}
+    """
+
+
+
+rule SubsetForAnnovar:
+  input:
+    master_vcf = "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/merged_VQSR_variants_pass_split.vcf.gz",
+    interval = "pipeline_files/interval_files/interval{batch}.intervals"
+  output:
+    temp("run_folder/gatk/gvcfs/joint/geno/VQSR/filter/annotated/annovar_batches/vcf_subset_list{batch}.vcf")
+  shell:
+    """
+    bcftools view -Ov -r "$(cat {input.interval})" {input.master_vcf} > {output}
+    """
+
+rule Annovar:
+  input:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/annotated/annovar_batches/vcf_subset_list{batch}.vcf"
+  output:
+    temp("run_folder/gatk/gvcfs/joint/geno/VQSR/filter/annotated/annovar_batches/merged_annovar.vcf_subset_list{batch}.hg19_multianno.vcf.gz")
+  shell:
+    """
+    table_annovar.pl \
+    {input} \
+    $ANNOVAR_HOME/humandb \
+    --buildver hg19 \
+    --outfile "$(echo {output[0]} | head -c -23)" \
+    --remove \
+    --protocol ensGene,refGene,1000g2014oct_eur,snp138,ljb26_all \
+    --operation g,g,f,f,f \
+    -nastring . \
+    -vcfinput \
+    -thread 16 # Assuming we always run on a full node (how manythreads does each core have?) 
+
+    bgzip "$(echo {output[0]} | head -c -4)"
+    """
+
+rule MergeAnnovarOutput:
+  input:
+    expand("run_folder/gatk/gvcfs/joint/geno/VQSR/filter/annotated/annovar_batches/merged_annovar.vcf_subset_list{i}.hg19_multianno.vcf.gz",
+      i = config["annovar_batches"])
+  output:
+    "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/annotated/merged_annovar.hg19_multianno.vcf.gz"
+  shell:
+    """
+    for batch in {input}; do
+      tabix $batch
+    done
+    bcftools concat {input} | bgzip -c > {output}
+    """
+
+################ CYP2D6 IMPUTATION ########################
+
+
+rule merge_stargazer_batches:
+    input:
+        expand(
+        "run_folder/stargazer/results/{{target}}/batch_{n}/batch_{n}_{{target}}.result.csv",
+         n = range(config["stargazer_batches"]))
+    output:
+        "run_folder/stargazer/results/{target}_haplotypes.csv"
+    shell:
+        """
+        for batch_result in {input}; do
+            tail -n+2 $batch_result >> {output}
+        done
+        """
+
+rule Stargazer:
+    params:
+        rlib        = config["R_LIB"],
+        stargazer   = config["stargazer"]
+    input:
+        target_vcf  = "run_folder/stargazer/data/vcf/batch_{n}.vcf.gz",
+        target_gdf  = "run_folder/stargazer/data/gdf/{target}/batch_{n}_{target}.gdf",
+        control_gdf = "run_folder/stargazer/data/gdf/vdr/batch_{n}_vdr.gdf"
+    output:
+        "run_folder/stargazer/results/{target}/batch_{n}/batch_{n}_{target}.result.csv"
+    shell:
+        """
+        mkdir -p run_folder/stargazer/results/{wildcards.target}/batch_{wildcards.n}
+        export R_LIBS_USER={params.rlib}
+        python3 {params.stargazer} genotype \
+            -p batch_{wildcards.n}_{wildcards.target} \
+            -T {wildcards.target} \
+            -C vdr \
+            -v ../../../../../{input.target_vcf} \
+            -t ../../../../../{input.target_gdf} \
+            -c ../../../../../{input.control_gdf} \
+            -w run_folder/stargazer/results/{wildcards.target}/batch_{wildcards.n} \
+            --wgs 
+        """
+
+
+rule produce_intervals:
+    output:
+        "run_folder/stargazer/data/gdf/{target}/{target}.interval"
+    run:
+        filename = f"run_folder/stargazer/data/gdf/{wildcards.target}/{wildcards.target}.interval"
+        with open(filename, "w+") as f:
+            f.write(config["stargazer_targets"][wildcards.target])
+
+
+rule produce_gdf:
+    params:
+        fasta      = config["fasta"]
+    input:
+        input_list = "run_folder/stargazer/data/gene_lists/{batch}_bams.list",
+        interval   = "run_folder/stargazer/data/gdf/{target}/{target}.interval"
+    output:
+        target_gdf = "run_folder/stargazer/data/gdf/{target}/{batch}_{target}.gdf"
+    shell:
+        """
+        java -jar $GATK_HOME/GenomeAnalysisTK.jar \
+            -T DepthOfCoverage \
+            -R {params.fasta} \
+            -I {input.input_list} \
+            -o {output.target_gdf} \
+            -L $(cat {input.interval})
+        """
+
+
+rule subset_vcf:
+    input:
+        samples = "run_folder/stargazer/data/gene_lists/batch_{n}_samples.list",
+        multisample_vcf = "run_folder/gatk/gvcfs/joint/geno/VQSR/filter/merged_VQSR_variants_pass_split.vcf.gz"
+    output:
+        temp("run_folder/stargazer/data/vcf/batch_{n}.vcf.gz")
+    shell:
+        """
+        bcftools view -Ov -S {input.samples} {input.multisample_vcf} | gzip -c > {output}
+        """
+
+
+rule get_gene_lists:
+    params:
+        bam_folder = config["bam_folder"],
+    input:
+        glob.glob(config["bam_folder"] + "/*bam")
+    output:
+        expand("run_folder/stargazer/data/gene_lists/batch_{n}_{suffix}",
+          n = range(config["stargazer_batches"]),
+          suffix = ["samples.list", "bams.list"])
+    run:
+        samples = [bam.replace(".bam", "").replace(params.bam_folder, "") for bam in input]
+        binned_location = binIt(input, config["stargazer_batch_size"])
+
+        binned_samples = list(map(
+            lambda x: [re.sub("(.clean.dedup.bam$|.bam$|^/proj/nobackup/sens2018106/analysis/pipeline_part1/bams/)", "", xi)
+            for xi in x], binIt(input, config["stargazer_batch_size"])))
+
+        for i in range(len(binned_samples)):
+             name_list_file = open("run_folder/stargazer/data/gene_lists/batch_{i}".format(i=i) + "_samples.list", "w+")
+             bam_list_file  = open("run_folder/stargazer/data/gene_lists/batch_{i}".format(i=i) + "_bams.list", "w+")
+             _ = [name_list_file.write(name.replace(".clean.dedup","") + "\n") for name in binned_samples[i]]
+             _ = [bam_list_file.write(bam + "\n") for bam in binned_location[i]]
+             name_list_file.close()
+             bam_list_file.close()
